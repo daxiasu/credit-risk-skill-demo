@@ -225,6 +225,38 @@
       filter: brightness(0.97);
     }
 
+    .btn:disabled {
+      cursor: not-allowed;
+      opacity: 0.58;
+      filter: none;
+    }
+
+    .run-status {
+      min-height: 36px;
+      display: flex;
+      align-items: center;
+      border: 1px solid #d8dee8;
+      border-radius: 7px;
+      background: #f8fafc;
+      color: #475569;
+      padding: 8px 10px;
+      margin: 0 0 12px;
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    .run-status.running {
+      border-color: #bfdbfe;
+      background: #eff6ff;
+      color: #1d4ed8;
+    }
+
+    .run-status.dirty {
+      border-color: #f3d18a;
+      background: #fff8e8;
+      color: #7c4a03;
+    }
+
     .result-top {
       display: grid;
       grid-template-columns: 120px 1fr;
@@ -328,6 +360,16 @@
       background: #ffffff;
     }
 
+    .step.pending {
+      background: #f8fafc;
+      color: #64748b;
+    }
+
+    .step.running {
+      border-color: #93c5fd;
+      background: #eff6ff;
+    }
+
     .step-num {
       width: 24px;
       height: 24px;
@@ -366,6 +408,7 @@
     .tag.warn { background: var(--amber); }
     .tag.danger { background: var(--red); }
     .tag.violet { background: var(--violet); }
+    .tag.pending { background: #94a3b8; }
 
     .data-grid {
       display: grid;
@@ -478,6 +521,99 @@
       border: 1px dashed #cfd7e3;
       border-radius: 7px;
     }
+
+    .log-box {
+      display: grid;
+      gap: 7px;
+      border: 1px solid #e1e7f0;
+      border-radius: 7px;
+      background: #0f172a;
+      color: #dbeafe;
+      padding: 10px;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      min-height: 112px;
+    }
+
+    .log-line {
+      display: grid;
+      grid-template-columns: 54px 1fr;
+      gap: 8px;
+    }
+
+    .log-time {
+      color: #93c5fd;
+    }
+
+    .rule-hit-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .rule-hit {
+      border: 1px solid #e1e7f0;
+      border-radius: 7px;
+      background: #ffffff;
+      padding: 9px 10px;
+    }
+
+    .rule-hit strong {
+      display: block;
+      margin-bottom: 3px;
+      font-size: 13px;
+    }
+
+    .rule-hit span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .trace-card {
+      border: 1px solid #bfdbfe;
+      border-radius: 8px;
+      background: #eff6ff;
+      padding: 10px;
+      margin-bottom: 10px;
+    }
+
+    .trace-card strong {
+      display: block;
+      color: #1d4ed8;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+
+    .trace-card span {
+      display: block;
+      color: #334155;
+      font-size: 12px;
+    }
+
+    .score-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    .score-table th,
+    .score-table td {
+      border-bottom: 1px solid #e1e7f0;
+      padding: 7px 6px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .score-table th {
+      color: #475569;
+      background: #f8fafc;
+      font-weight: 750;
+    }
+
+    .score-table td:last-child,
+    .score-table th:last-child {
+      text-align: right;
+      white-space: nowrap;
+    }
   </style>
 </head>
 <body>
@@ -522,6 +658,7 @@
             <button class="btn secondary" id="resetBtn">恢复样例数据</button>
             <button class="btn secondary" id="copyBtn">复制报告</button>
           </div>
+          <div class="run-status dirty" id="runStatus">资料已加载，等待发起 Skill 分析。</div>
           <div class="copy-status" id="copyStatus"></div>
 
           <div class="result-top">
@@ -560,7 +697,34 @@
           </div>
         </div>
         <div class="panel-body">
+          <div class="section" style="border-top:0;margin-top:0;padding-top:0;">
+            <div class="section-title">平台路由</div>
+            <div class="pipeline" id="routerPipeline"></div>
+          </div>
+
+          <div class="section">
+            <div class="section-title">SKILL.md 工作流进度</div>
+            <div class="pipeline" id="skillPipeline"></div>
+          </div>
+
+          <div class="section">
+            <div class="section-title">risk_rules.md 命中规则</div>
+            <div id="causeTrace"></div>
+            <div id="scoreBreakdown"></div>
+            <div class="rule-hit-list" id="ruleHits"></div>
+          </div>
+
+          <!-- 保留旧 id 作为脚本兼容容器，不直接展示。 -->
+          <div class="pipeline" id="pipeline" style="display:none;"></div>
+
+          <!--
           <div class="pipeline" id="pipeline"></div>
+          -->
+
+          <div class="section">
+            <div class="section-title">执行日志</div>
+            <div class="log-box" id="logBox"></div>
+          </div>
 
           <div class="section">
             <div class="section-title">Skill 包调用关系</div>
@@ -798,6 +962,10 @@
     let baseCase = structuredClone(enterprises[0]);
     let currentCase = structuredClone(baseCase);
     let lastReport = "";
+    let lastResult = null;
+    let hasRun = false;
+    let running = false;
+    let logLines = [];
 
     const els = {
       enterpriseSelect: document.getElementById("enterpriseSelect"),
@@ -814,6 +982,13 @@
       questionList: document.getElementById("questionList"),
       materialList: document.getElementById("materialList"),
       pipeline: document.getElementById("pipeline"),
+      routerPipeline: document.getElementById("routerPipeline"),
+      skillPipeline: document.getElementById("skillPipeline"),
+      ruleHits: document.getElementById("ruleHits"),
+      causeTrace: document.getElementById("causeTrace"),
+      scoreBreakdown: document.getElementById("scoreBreakdown"),
+      runStatus: document.getElementById("runStatus"),
+      logBox: document.getElementById("logBox"),
       profileBox: document.getElementById("profileBox"),
       creditType: document.getElementById("creditType"),
       cashFlow: document.getElementById("cashFlow"),
@@ -840,30 +1015,41 @@
 
     function evaluate(c) {
       const signals = [];
-      const add = (dimension, name, basis, attention, score) => signals.push({ dimension, name, basis, attention, score });
+      const add = (dimension, name, basis, attention, score, rule) => signals.push({ dimension, name, basis, attention, score, rule });
 
-      if (c.cashFlowNegative) add("财务质量", "经营性现金流为负", "经营性现金流为负，需要核验回款质量和资金缺口。", "高", 15);
-      if (c.receivables >= 40) add("财务质量", "应收账款占收入比例偏高", `应收账款占营收比例为 ${c.receivables}%，超过 40% 重点核验阈值。`, "中", 12);
-      if (c.liability >= 70) add("财务质量", "资产负债率偏高", `资产负债率为 ${c.liability}%，需关注偿债压力。`, "中", 8);
-      if (c.revenueGrowth <= -15) add("财务质量", "收入明显下滑", `收入增长率为 ${c.revenueGrowth}%。`, "中", 10);
-      if (c.profitGrowth <= -20) add("财务质量", "利润明显下滑", `利润增长率为 ${c.profitGrowth}%。`, "中", 8);
-      if (c.customerConcentration) add("经营真实性", "客户集中度较高", "核心客户依赖明显，需要核验订单稳定性和回款持续性。", "中", 10);
-      if (c.missingProof) add("经营真实性", "交易真实性佐证不足", "合同、发票、物流、仓储、验收或回款凭证不完整。", "高", /贸易|供应链/.test(c.industry) ? 25 : 15);
-      if (c.inventoryPressure) add("经营真实性", "库存周转压力上升", "库存周转周期拉长或库存增加，需要核验备货和销售转化。", "中", 10);
-      if (c.relatedParty) add("关联关系", c.relatedMinor ? "存在少量关联交易待核验" : "存在关联交易或关联担保待核验", c.relatedMinor ? "少量关联交易作为轻微信号处理。" : "关联交易、关联担保或关联结算需要核验定价和资金流向。", c.relatedMinor ? "低" : "中", c.relatedMinor ? 6 : 10);
-      if (c.legalIssue) add("司法与舆情", "存在被执行或重大诉讼", "司法风险可能影响履约能力和偿债安排。", "高", 25);
-      if (c.negativeSentiment) add("司法与舆情", "存在负面舆情或经营异常报道", "需核验停工、拖欠、投诉、整改或其他公开负面信息。", "高", 18);
-      if (c.environmentalIssue) add("司法与舆情", "环保合规事项待核验", "化工、制造等行业中环保整改可能影响经营连续性。", "高", 18);
-      if (c.shareholderChange) add("主体资质", "法定代表人或股东频繁变更", "主体稳定性和实际控制关系需要核验。", "高", 15);
-      if (c.shortDebt) add("财务质量", "短期债务压力上升", "短期借款明显增加或再融资压力上升。", "中", 10);
-      if (c.industryDownturn) add("行业与授信用途", "行业景气度下行", "行业周期或地产链等外部环境影响经营稳定性。", "中", 8);
+      if (c.cashFlowNegative) add("财务质量", "经营性现金流为负", "经营性现金流为负，需要核验回款质量和资金缺口。", "高", 15, "risk_rules.md / 财务质量 / 经营性现金流为负");
+      if (c.receivables >= 40) add("财务质量", "应收账款占收入比例偏高", `应收账款占营收比例为 ${c.receivables}%，超过 40% 重点核验阈值。`, "中", 12, "risk_rules.md / 财务质量 / 应收账款超过 40%");
+      if (c.liability >= 70) add("财务质量", "资产负债率偏高", `资产负债率为 ${c.liability}%，需关注偿债压力。`, "中", 8, "risk_rules.md / 财务质量 / 资产负债率偏高");
+      if (c.revenueGrowth <= -15) add("财务质量", "收入明显下滑", `收入增长率为 ${c.revenueGrowth}%。`, "中", 10, "risk_rules.md / 财务质量 / 收入下滑");
+      if (c.profitGrowth <= -20) add("财务质量", "利润明显下滑", `利润增长率为 ${c.profitGrowth}%。`, "中", 8, "risk_rules.md / 财务质量 / 利润下滑");
+      if (c.customerConcentration) add("经营真实性", "客户集中度较高", "核心客户依赖明显，需要核验订单稳定性和回款持续性。", "中", 10, "risk_rules.md / 经营真实性 / 前五大客户占比超过 60%");
+      if (c.missingProof) add("经营真实性", "交易真实性佐证不足", "合同、发票、物流、仓储、验收或回款凭证不完整。", "高", /贸易|供应链/.test(c.industry) ? 25 : 15, /贸易|供应链/.test(c.industry) ? "risk_rules.md / 经营真实性 / 贸易类交易凭证不足加权" : "risk_rules.md / 经营真实性 / 交易凭证不足");
+      if (c.inventoryPressure) add("经营真实性", "库存周转压力上升", "库存周转周期拉长或库存增加，需要核验备货和销售转化。", "中", 10, "risk_rules.md / 经营真实性 / 库存周转压力");
+      if (c.relatedParty) add("关联关系", c.relatedMinor ? "存在少量关联交易待核验" : "存在关联交易或关联担保待核验", c.relatedMinor ? "少量关联交易作为轻微信号处理。" : "关联交易、关联担保或关联结算需要核验定价和资金流向。", c.relatedMinor ? "低" : "中", c.relatedMinor ? 6 : 10, c.relatedMinor ? "risk_rules.md / 关联关系 / 少量关联交易轻微信号" : "risk_rules.md / 关联关系 / 关联交易或担保");
+      if (c.legalIssue) add("司法与舆情", "存在被执行或重大诉讼", "司法风险可能影响履约能力和偿债安排。", "高", 25, "risk_rules.md / 司法与舆情 / 被执行或重大诉讼");
+      if (c.negativeSentiment) add("司法与舆情", "存在负面舆情或经营异常报道", "需核验停工、拖欠、投诉、整改或其他公开负面信息。", "高", 18, "risk_rules.md / 司法与舆情 / 负面舆情");
+      if (c.environmentalIssue) add("司法与舆情", "环保合规事项待核验", "化工、制造等行业中环保整改可能影响经营连续性。", "高", 18, "risk_rules.md / 司法与舆情 / 环保合规事项");
+      if (c.shareholderChange) add("主体资质", "法定代表人或股东频繁变更", "主体稳定性和实际控制关系需要核验。", "高", 15, "risk_rules.md / 主体资质 / 法定代表人或股东频繁变更");
+      if (c.shortDebt) add("财务质量", "短期债务压力上升", "短期借款明显增加或再融资压力上升。", "中", 10, "risk_rules.md / 财务质量 / 短期借款明显增加");
+      if (c.industryDownturn) add("行业与授信用途", "行业景气度下行", "行业周期或地产链等外部环境影响经营稳定性。", "中", 8, "risk_rules.md / 行业与区域 / 行业周期下行");
 
-      let score = signals.reduce((sum, item) => sum + item.score, 0);
-      if (c.insufficientData) score = Math.max(score, 21);
-      if (c.creditType === "首次授信") score = Math.max(score, 21);
-      if (signals.some(s => s.dimension === "关联关系")) score = Math.max(score, 21);
+      const baseScore = signals.reduce((sum, item) => sum + item.score, 0);
+      let score = baseScore;
+      const floorRules = [];
+      if (c.insufficientData) {
+        score = Math.max(score, 21);
+        floorRules.push({ name: "资料严重不足最低 L2", source: "SKILL.md 必要输入 + risk_rules.md 等级选择指引", score: 21 });
+      }
+      if (c.creditType === "首次授信") {
+        score = Math.max(score, 21);
+        floorRules.push({ name: "首次授信最低 L2", source: "业务专家定标口径", score: 21 });
+      }
+      if (signals.some(s => s.dimension === "关联关系")) {
+        score = Math.max(score, 21);
+        floorRules.push({ name: "关联交易最低 L2", source: "业务专家定标口径 + risk_rules.md 关联关系", score: 21 });
+      }
       score = Math.min(score, 100);
-      return { score, level: levelForScore(score), signals };
+      return { baseScore, score, level: levelForScore(score), signals, floorRules };
     }
 
     function questionsFor(c, signals) {
@@ -890,12 +1076,10 @@
       return materials;
     }
 
-    function render() {
-      syncCaseFromControls();
-      const result = evaluate(currentCase);
-      const questions = questionsFor(currentCase, result.signals);
-      const materials = materialsFor(result.signals);
+    const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+    function renderResult(result, questions, materials) {
+      syncCaseFromControls();
       els.levelText.textContent = result.level;
       els.levelText.className = `level level-${result.level}`;
       els.scoreText.textContent = `关注分 ${result.score}`;
@@ -920,31 +1104,210 @@
           <strong>${i + 1}. ${m}</strong>
         </div>`).join("");
 
-      renderPipeline(result);
+      renderExecutionTrace(result, 7);
       renderProfile();
       lastReport = buildReport(result, questions, materials);
     }
 
-    function renderPipeline(result) {
+    function renderPlaceholder(message = "等待发起 Skill 分析。") {
+      els.levelText.textContent = "--";
+      els.levelText.className = "level";
+      els.scoreText.textContent = "尚未计算";
+      els.summaryTitle.textContent = `${currentCase.name}｜${currentCase.creditType} ${currentCase.amount}`;
+      els.summaryText.textContent = message;
+      els.riskList.innerHTML = `<div class="empty">点击“生成分析”后，Skill 将识别风险线索。</div>`;
+      els.questionList.innerHTML = `<div class="empty">执行完成后生成现场走访问询清单。</div>`;
+      els.materialList.innerHTML = `<div class="empty">执行完成后生成补充材料清单。</div>`;
+      lastReport = "";
+      renderExecutionTrace(null, 0);
+      renderProfile();
+    }
+
+    function routeSteps() {
       const routeHit = /授信|风险|企业|走访|尽调|客户/.test(els.promptInput.value);
-      const steps = [
+      return [
         ["意图识别", routeHit ? "识别为企业授信走访前风险分析任务。" : "当前输入未明显命中授信风险场景。", routeHit ? "ok" : "warn"],
         ["Router 路由", routeHit ? "命中 credit-visit-risk-analysis Skill。" : "建议补充企业授信、风险、走访等关键词。", routeHit ? "info" : "warn"],
-        ["加载 Skill", "读取 SKILL.md，总体流程、输入输出和合规边界生效。", "info"],
-        ["读取规则", "调用 risk_rules.md：首次授信、关联交易、贸易真实性等规则生效。", "violet"],
-        ["数据检查", `当前企业：${currentCase.name}，授信类型：${currentCase.creditType}。`, "ok"],
-        ["风险计算", `识别 ${result.signals.length} 条风险线索，风险关注分 ${result.score}，等级 ${result.level}。`, result.level === "L5" || result.level === "L4" ? "danger" : result.level === "L3" ? "warn" : "ok"],
-        ["报告生成", "按 report_template.md 输出摘要、风险线索、走访问题和材料清单。", "ok"]
+        ["加载 Skill 包", "加载 SKILL.md、risk_rules.md、report_template.md。", "info"]
       ];
-      els.pipeline.innerHTML = steps.map((s, i) => `
-        <div class="step">
+    }
+
+    function skillSteps(result) {
+      return [
+        ["SKILL.md 第1步", "收集企业基础信息和本次授信背景。", "ok"],
+        ["SKILL.md 第2步", "检查关键资料是否完整。", "ok"],
+        ["SKILL.md 第3步", "生成企业基本画像和授信背景摘要。", "ok"],
+        ["SKILL.md 第4步", result ? `调用 risk_rules.md，命中 ${result.signals.length} 条风险规则。` : "调用 risk_rules.md，从主体、财务、经营、司法、关联等维度匹配规则。", result && result.signals.length ? "warn" : "ok"],
+        ["SKILL.md 第5步", result ? `将 ${result.score} 分映射为走访前风险关注等级 ${result.level}。` : "将规则分映射为 L1-L5 走访前风险关注等级。", result ? (result.level === "L5" || result.level === "L4" ? "danger" : result.level === "L3" ? "warn" : "ok") : "pending"],
+        ["SKILL.md 第6步", "生成现场走访问询清单。", "ok"],
+        ["SKILL.md 第7步", "生成优先级明确的补充材料清单。", "ok"],
+        ["SKILL.md 第8步", "输出数据缺口、置信度、合规边界和人工复核建议。", "ok"]
+      ];
+    }
+
+    function renderStepList(container, steps, activeCount = 0, runningIndex = -1) {
+      container.innerHTML = steps.map((s, i) => {
+        const done = i < activeCount;
+        const isRunning = i === runningIndex;
+        const cls = isRunning ? "running" : done ? "" : "pending";
+        const tagClass = isRunning ? "info" : done ? s[2] : "pending";
+        const tagText = isRunning ? "执行中" : done ? (s[2] === "ok" ? "完成" : s[2] === "warn" ? "关注" : s[2] === "danger" ? "高关注" : "执行") : "等待";
+        return `
+        <div class="step ${cls}">
           <div class="step-num">${i + 1}</div>
           <div>
             <div class="step-title">${s[0]}</div>
             <div class="step-text">${s[1]}</div>
           </div>
-          <span class="tag ${s[2]}">${s[2] === "ok" ? "完成" : s[2] === "warn" ? "关注" : s[2] === "danger" ? "高关注" : "执行"}</span>
-        </div>`).join("");
+          <span class="tag ${tagClass}">${tagText}</span>
+        </div>`;
+      }).join("");
+    }
+
+    function renderRuleHits(result, active = false) {
+      if (!result) {
+        els.causeTrace.innerHTML = `<div class="trace-card"><strong>等待调用</strong><span>执行到 SKILL.md 第4步后，将调用 risk_rules.md 开始规则匹配。</span></div>`;
+        els.scoreBreakdown.innerHTML = "";
+        els.ruleHits.innerHTML = `<div class="empty">等待风险计算。执行到 SKILL.md 第4步后，将展示 risk_rules.md 命中的具体规则。</div>`;
+        return;
+      }
+      const scoreText = result.baseScore === result.score
+        ? `规则分合计 ${result.baseScore} 分`
+        : `规则分合计 ${result.baseScore} 分，底线规则修正为 ${result.score} 分`;
+      els.causeTrace.innerHTML = `
+        <div class="trace-card">
+          <strong>调用因果链</strong>
+          <span>SKILL.md 第4步“提取风险线索” → 调用 risk_rules.md → 命中 ${result.signals.length} 条风险规则 → ${scoreText} → SKILL.md 第5步映射为 ${result.level}。</span>
+        </div>
+      `;
+      const signalRows = result.signals.map(s => `
+        <tr>
+          <td>${s.dimension}</td>
+          <td>${s.name}</td>
+          <td>${s.score}</td>
+        </tr>
+      `).join("");
+      const floorRows = result.floorRules.map(r => `
+        <tr>
+          <td>底线规则</td>
+          <td>${r.name}</td>
+          <td>最低 ${r.score}</td>
+        </tr>
+      `).join("");
+      els.scoreBreakdown.innerHTML = `
+        <div class="section-title" style="margin-top:10px;">评分构成</div>
+        <table class="score-table">
+          <thead><tr><th>来源</th><th>规则/信号</th><th>分值</th></tr></thead>
+          <tbody>
+            ${signalRows || `<tr><td>规则命中</td><td>无明确风险信号</td><td>0</td></tr>`}
+            ${floorRows}
+            <tr><td><strong>等级映射</strong></td><td><strong>${result.score} 分 → ${result.level}</strong></td><td><strong>${result.score}</strong></td></tr>
+          </tbody>
+        </table>
+      `;
+      if (!result.signals.length) {
+        els.ruleHits.innerHTML = `<div class="empty">未命中明确风险规则；若为首次授信或资料缺口，仍按基础口径进入常规核验。</div>`;
+        return;
+      }
+      els.ruleHits.innerHTML = result.signals.map(s => `
+        <div class="rule-hit">
+          <strong>${s.rule}｜+${s.score}</strong>
+          <span>${s.name}：${s.basis}</span>
+        </div>
+      `).join("");
+    }
+
+    function renderExecutionTrace(result, skillActiveCount = 0, skillRunningIndex = -1, routeActiveCount = 0, routeRunningIndex = -1) {
+      renderStepList(els.routerPipeline, routeSteps(), routeActiveCount || (skillActiveCount ? 3 : 0), routeRunningIndex);
+      renderStepList(els.skillPipeline, skillSteps(result), skillActiveCount, skillRunningIndex);
+      renderRuleHits(result);
+    }
+
+    function addLog(text) {
+      const stamp = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+      logLines.push([stamp, text]);
+      els.logBox.innerHTML = logLines.slice(-8).map(line => `
+        <div class="log-line"><span class="log-time">${line[0]}</span><span>${line[1]}</span></div>
+      `).join("");
+    }
+
+    function setDirty(message = "资料已变更，等待重新发起 Skill 分析。") {
+      if (running) return;
+      hasRun = false;
+      lastResult = null;
+      els.runStatus.textContent = message;
+      els.runStatus.className = "run-status dirty";
+      renderPlaceholder(message);
+    }
+
+    async function runAnalysis() {
+      if (running) return;
+      running = true;
+      els.runBtn.disabled = true;
+      els.copyBtn.disabled = true;
+      logLines = [];
+      els.logBox.innerHTML = "";
+      els.runStatus.textContent = "正在执行 Skill，请稍候...";
+      els.runStatus.className = "run-status running";
+      renderPlaceholder("Skill 正在执行，报告将在完成后生成。");
+
+      const routeLogs = [
+        "平台入口收到信贷经理问题。",
+        "Router 识别为授信走访前风险分析任务。",
+        "命中并加载 credit-visit-risk-analysis Skill 包。"
+      ];
+      for (let i = 0; i < routeLogs.length; i += 1) {
+        renderExecutionTrace(null, 0, -1, i, i);
+        addLog(routeLogs[i]);
+        await sleep(420);
+      }
+
+      syncCaseFromControls();
+      let result = null;
+      const skillLogs = [
+        `SKILL.md 第1步：收集企业资料：${currentCase.name}，${currentCase.creditType}，${currentCase.amount}。`,
+        "SKILL.md 第2步：检查资料完整性和授信背景。",
+        "SKILL.md 第3步：生成企业画像和授信背景摘要。",
+        "SKILL.md 第4步：进入 risk_rules.md，开始抽取风险线索。",
+        "SKILL.md 第5步：汇总规则分并映射 L1-L5。",
+        "SKILL.md 第6步：生成现场走访问询清单。",
+        "SKILL.md 第7步：生成补充材料清单。",
+        "SKILL.md 第8步：补充合规边界和人工复核提示。"
+      ];
+      for (let i = 0; i < skillLogs.length; i += 1) {
+        if (i === 3) {
+          result = evaluate(currentCase);
+          renderExecutionTrace(result, i, i, 3, -1);
+          addLog(skillLogs[i]);
+          if (result.signals.length) {
+            result.signals.forEach(s => addLog(`${s.rule} 命中：${s.name}，+${s.score}`));
+          } else {
+            addLog("risk_rules.md 未命中明确风险规则。");
+          }
+        } else if (i === 4 && result) {
+          renderExecutionTrace(result, i, i, 3, -1);
+          addLog(`${skillLogs[i]} 当前关注分 ${result.score}，等级 ${result.level}。`);
+        } else {
+          renderExecutionTrace(result, i, i, 3, -1);
+          addLog(skillLogs[i]);
+        }
+        await sleep(i === 3 ? 680 : 420);
+      }
+
+      if (!result) {
+        result = evaluate(currentCase);
+      }
+      const questions = questionsFor(currentCase, result.signals);
+      const materials = materialsFor(result.signals);
+      lastResult = result;
+      hasRun = true;
+      renderResult(result, questions, materials);
+      addLog(`完成：输出 ${result.level}，识别 ${result.signals.length} 条风险线索。`);
+      els.runStatus.textContent = "分析完成。右侧数据若发生变化，需要重新生成分析。";
+      els.runStatus.className = "run-status";
+      els.runBtn.disabled = false;
+      els.copyBtn.disabled = false;
+      running = false;
     }
 
     function renderProfile() {
@@ -1016,7 +1379,7 @@
       baseCase = structuredClone(enterprises[index]);
       currentCase = structuredClone(baseCase);
       syncControlsFromCase();
-      render();
+      setDirty("企业资料已加载，等待发起 Skill 分析。");
     }
 
     function applyPreset(type) {
@@ -1045,15 +1408,20 @@
         currentCase.shortDebt = true;
       }
       syncControlsFromCase();
-      render();
+      setDirty("情景数据已应用，等待重新发起 Skill 分析。");
     }
 
     function init() {
       els.enterpriseSelect.innerHTML = enterprises.map((e, i) => `<option value="${i}">${e.id}｜${e.name}｜${e.industry}</option>`).join("");
       els.enterpriseSelect.addEventListener("change", e => selectEnterprise(Number(e.target.value)));
-      els.runBtn.addEventListener("click", render);
+      els.runBtn.addEventListener("click", runAnalysis);
       els.resetBtn.addEventListener("click", () => selectEnterprise(Number(els.enterpriseSelect.value)));
       els.copyBtn.addEventListener("click", async () => {
+        if (!lastReport) {
+          els.copyStatus.textContent = "请先点击“生成分析”，待报告生成后再复制。";
+          setTimeout(() => els.copyStatus.textContent = "", 2400);
+          return;
+        }
         try {
           await navigator.clipboard.writeText(lastReport);
           els.copyStatus.textContent = "报告已复制。";
@@ -1062,10 +1430,10 @@
         }
         setTimeout(() => els.copyStatus.textContent = "", 2400);
       });
-      [els.creditType, els.cashFlow, els.customerConcentration, els.missingProof, els.relatedParty, els.legalIssue, els.negativeSentiment, els.shareholderChange, els.shortDebt].forEach(el => el.addEventListener("change", render));
+      [els.creditType, els.cashFlow, els.customerConcentration, els.missingProof, els.relatedParty, els.legalIssue, els.negativeSentiment, els.shareholderChange, els.shortDebt].forEach(el => el.addEventListener("change", () => setDirty()));
       [[els.receivables, els.receivablesValue], [els.liability, els.liabilityValue]].forEach(([range, number]) => {
-        range.addEventListener("input", () => { number.value = range.value; render(); });
-        number.addEventListener("input", () => { range.value = number.value; render(); });
+        range.addEventListener("input", () => { number.value = range.value; setDirty(); });
+        number.addEventListener("input", () => { range.value = number.value; setDirty(); });
       });
       document.querySelectorAll("[data-preset]").forEach(btn => btn.addEventListener("click", () => applyPreset(btn.dataset.preset)));
       selectEnterprise(0);
